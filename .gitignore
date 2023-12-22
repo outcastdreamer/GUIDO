@@ -1,3 +1,7 @@
+#Build Files & Folders
+Build_Dev/
+Build_Dev/**
+
 #User json files
 files_history.json
 settings.json
@@ -7,6 +11,7 @@ tempCodeRunnerFile.py
 mkdir_gen.py
 app.log
 Test/
+test.py
 
 #git
 .git/
