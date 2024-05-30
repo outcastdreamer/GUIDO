@@ -4,7 +4,9 @@ Build_Dev/**
 
 #User json files
 files_history.json
-settings.json
+guido_settings.json
+selected_dir.txt
+explorer_dir.txt
 
 #Test files & folders
 tempCodeRunnerFile.py
@@ -15,3 +17,4 @@ test.py
 
 #git
 .git/
+.gitignore

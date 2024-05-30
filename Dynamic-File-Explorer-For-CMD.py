@@ -1,5 +1,16 @@
 """
-# Dynamic File Explorer For CMD : 
+# Dynamic File Explorer For CMD :
+    # v0.0.6
+        > Change 'e', "E", and "ALT+E" shortcuts feature to directly change directory to 
+            parent cmd shell & explorer.
+        > Previously binded "e" and "E" has been move to "c" and "C" keys.
+        > Added guido.bat for running the python code
+        > Changed sort order from "D" to "O" key
+        > TODO: Need to fix recent folders bug still
+        > TODO: Need to rename project to GUIDO and need to add guido_settings.json
+                for cutsom keymapping & color schemes (maybe)
+        > TODO: Try multi-pane implementation
+        > TODO: Add Starred or Saved Folders logic
     # v0.0.5
         > Fixed cmd resize issue which was causing cursor to go out of screen
         > Fixed path size bleeding off to next line if the path length was too long than current terminal size
@@ -14,6 +25,7 @@
 import os
 import re
 import json
+import time
 import logging
 from sys import exit
 
@@ -25,10 +37,13 @@ logging.basicConfig(filename='app.log', filemode='w',
                     format='%(lineno)d, %(funcName)s=> %(message)s', datefmt='%H:%M:%S',
                     level=logging.CRITICAL)
 
+
+version = "0.0.6"
 # ----------------------------------------------------------------------------------------------------- #
 class FileExplorer:
     def __init__(self, stdscr, path='.'):
         self.stdscr = stdscr
+        self.exe_path = os.getcwd()
         self.current_path = os.path.abspath(path)
         self.root_path = self.current_path
         self.display_path = self.current_path
@@ -45,8 +60,11 @@ class FileExplorer:
         self.previous_index = 0
         self.MAX_FILE_DISPLAY_LIMIT = curses.LINES - 3
         logging.debug(" NEW SESSION BEGINS ".center(75, "+"))
+        logging.debug(f"Version: {version}")
         logging.debug(f"self.MAX_FILE_DISPLAY_LIMIT #1 : {self.MAX_FILE_DISPLAY_LIMIT}, curses.LINES : {curses.LINES}")
-        os.system("clear")
+        logging.debug(f"self.MAX_FILE_DISPLAY_LIMIT #1 : {self.MAX_FILE_DISPLAY_LIMIT}, curses.LINES : {curses.LINES}")
+        logging.debug(f"exe path: {self.exe_path}")
+        os.system("cls")
         
         # ----------------------------------------------------------------------------------------------------- #
         self.files = self.get_files(self.current_path)
@@ -375,20 +393,12 @@ class FileExplorer:
                         self.top_position = 0
                     self.files = temp_files[self.top_position:]
                     self.selected_index = self.previous_index
-            self.json_updater()
-            
-        # ------------------------------------------- ARROW KEYS END ------------------------------------------ #
-        elif key == ord('A'):
-            selected_item = self.files[self.selected_index]
-            selected_path = os.path.join(self.current_path, selected_item)
+            self.json_updater()  
+        logging.debug(f"END key : {str(key)}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, CP: {self.current_path}")
+        
 
-            try:
-                if os.path.isdir(selected_path):
-                    pass
-            except:
-                pass
-            
-        elif key == ord('D'):
+    def function_keys(self, key):        
+        if key in [ord('o'), ord('O')]:  # Sort Order Shortcut
             if (self.descendingSort_Flag):
                 self.descendingSort_Flag = 0
             else:
@@ -399,13 +409,13 @@ class FileExplorer:
             self.top_position = 0
             self.json_updater()
         
-        elif key == ord('r'):
+        elif key == ord('r'):  # Recent Files
             self.recent_check = 1
             self.json_updater()
             self.files = self.get_recent_files()
             self.selected_index = 0
             
-        elif key == ord('R'):
+        elif key == ord('R'):  # Restore Last Location
             self.recent_check = 1
             self.json_updater()
             self.current_path = self.json_dict["Restore_Folder"]
@@ -413,25 +423,52 @@ class FileExplorer:
             self.files_count = len(self.files)
             self.selected_index = 0
         
-        elif key in [ord('e'), ord('E')]:
+        elif key == ord('e'):  # Exit to Parent shell and change directory to active folder
             if os.path.isdir(self.current_path):
-                pyperclip.copy(r'cd "%s"'%self.current_path)
-                exit()
+                with open("selected_dir.txt", "w") as f:
+                    f.write(self.current_path)
+                    try:
+                        os.remove("explorer_dir.txt")
+                    except FileNotFoundError:
+                        pass
+                    exit()
         
-        elif key in [ord('`'), ord('~'), ord('.'), ord('>')]:
+        elif key == ord('E'):  # Exit to Parent shell and change directory to selected folder
+            selected_item = self.files[self.selected_index]
+            selected_path = os.path.join(self.current_path, selected_item)
+            if os.path.isdir(selected_path):
+                with open("selected_dir.txt", "w") as f:
+                    f.write(selected_path)
+                    try:
+                        os.remove("explorer_dir.txt")
+                    except FileNotFoundError:
+                        pass
+                    exit()
+                    
+        elif key == curses.ALT_E:  # Open current folder in explorer
+            if os.path.isdir(self.current_path):
+                with open("explorer_dir.txt", "w") as f:
+                    f.write(self.current_path)
+                    try:
+                        os.remove("selected_dir.txt")
+                    except FileNotFoundError:
+                        pass
+                    exit()
+        
+        elif key in [ord('`'), ord('~'), ord('.'), ord('>')]:  # Go back to Root Path
             self.current_path = self.root_path
             self.files = self.get_files(self.current_path)
             self.selected_index = 0
         
-        elif key == ord('c'): 
+        elif key == ord('c'):   # Copy selected file with folder path to clipboard
             selected_item = self.files[self.selected_index]
             selected_path = os.path.join(self.current_path, selected_item)
             pyperclip.copy(r"%s"%selected_path)
         
-        elif key == ord('C'): 
+        elif key == ord('C'):  # Copy selected folder path to clipboard
             pyperclip.copy(self.current_path)
         
-        elif key in [ord('h'), ord('H')]:  
+        elif key in [ord('h'), ord('H')]:   # So hidden or unhidden folders
             if (self.hidden_folder):
                 self.hidden_folder = 0
             else:
@@ -439,11 +476,19 @@ class FileExplorer:
             
             self.files = self.get_files(self.current_path)
             self.selected_index = 0
-            
-        logging.debug(f"END key : {str(key)}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, CP: {self.current_path}")
-        
 
     def run(self):
+        try:
+            os.remove("selected_dir.txt")
+        except FileNotFoundError:
+            pass
+        
+        try:
+            os.remove("explorer_dir.txt")
+        except FileNotFoundError:
+            pass
+        
+        
         while True:            
             self.draw()
             key = self.stdscr.getch()
@@ -453,7 +498,10 @@ class FileExplorer:
                 logging.debug(f"\n\n{self.files}")
                 exit()
             else:
-                self.navigate(key)
+                if key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8, curses.KEY_RIGHT, curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]:
+                    self.navigate(key)
+                else:
+                    self.function_keys(key)
 
 def main(stdscr):
     explorer = FileExplorer(stdscr)
