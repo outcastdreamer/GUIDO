@@ -37,8 +37,8 @@ logging.basicConfig(filename='app.log', filemode='w',
                     format='%(lineno)d, %(funcName)s=> %(message)s', datefmt='%H:%M:%S',
                     level=logging.CRITICAL)
 
-
 version = "0.0.6"
+
 # ----------------------------------------------------------------------------------------------------- #
 class FileExplorer:
     def __init__(self, stdscr, path='.'):
@@ -58,6 +58,11 @@ class FileExplorer:
         self.top_position = 0
         self.descendingSort_Flag = False
         self.previous_index = 0
+        self.active_pane_index = 0
+        self.dir_mode_flag = False
+        self.rightSide_files = []
+        self.enter_once = True
+        self.temp_values = []
         self.MAX_FILE_DISPLAY_LIMIT = curses.LINES - 3
         logging.debug(" NEW SESSION BEGINS ".center(75, "+"))
         logging.debug(f"Version: {version}")
@@ -83,17 +88,17 @@ class FileExplorer:
         self.stdscr.nodelay(True)
         self.stdscr.refresh()
     
-    def set_display_path(self, max_x):
+    def set_display_path(self, width):
         current_len = len("CURRENT PATH: ") + len(self.current_path) + 2 + len(f"[{self.files_count}]")
-        if (current_len > max_x):
+        if (current_len > width):
             prev_dir = self.current_path[0:self.current_path.rfind("\\")]
             self.display_path = "...\\" + prev_dir[prev_dir.rfind("\\")+1:] + "\\" + self.current_path[self.current_path.rfind("\\")+1:]
-            if (len(self.display_path) > max_x):
+            if (len(self.display_path) > width):
                 self.display_path = "...\\" + self.display_path[self.display_path.rfind("\\") + 1:]
         else:
             self.display_path = self.current_path
         
-    def highlight_current_position(self, i, file):
+    def highlight_current_position(self, i, file, pos_y):
         try:
             if (self.exception_check):
                 if (self.current_path != self.root_path):
@@ -103,63 +108,160 @@ class FileExplorer:
                     logging.debug(f"EXCEPTION: PrevPath : {self.previous_path}, CurrentPath: {self.current_path}")
                 else:
                     self.previous_path = self.current_path
-                self.stdscr.addstr(i + 2, 2, file, curses.color_pair(1))
-                self.stdscr.addstr(i + 2, 2 + len(file) + 2, "[ERROR] : %s"%(self.exception_string), curses.color_pair(3))
+                self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                self.stdscr.addstr(i + 2, pos_y + len(file) + 2, "[ERROR] : %s"%(self.exception_string), curses.color_pair(3))
             else:
-                self.stdscr.addstr(i + 2, 2, file, curses.color_pair(1) | curses.A_REVERSE | curses.A_BOLD)
+                self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1) | curses.A_REVERSE | curses.A_BOLD)
         except curses.error:
             pass 
 
-    def draw(self):    
-        try: 
-            max_y, max_x = self.stdscr.getmaxyx()
-            self.MAX_FILE_DISPLAY_LIMIT = max_y - 3
-            self.set_display_path(max_x)
+    def draw(self):
+        self.height, self.width = self.stdscr.getmaxyx()
+        self.MAX_FILE_DISPLAY_LIMIT = self.height - 3
+        if (self.active_pane_index):
+            self.both_pane_draw()
+        elif (self.dir_mode_flag):
+            self.right_pane_view()
+        else:    
+            self.pane_display(True, True, self.current_path, self.get_files(self.current_path), 2)
+            
+    def right_pane_view(self):
+        try:
+            if (self.enter_once):
+                self.files = self.get_files(self.current_path)
+                self.enter_once = False
+                fileName_size = (self.width // 2) - 5
+                trimmed_left_files_list = [i[:fileName_size-5] + "..." if len(i) > fileName_size else i for i in self.get_files(self.current_path)]
+                self.active_pane_index = 0
+                self.pane_display(True, True, self.current_path, trimmed_left_files_list, 2, 0)
+                
+                iSplit_size = (self.width // 2) + 5
+                selected_item = self.files[self.selected_index]
+                # print(selected_item)
+                
+                selected_path = os.path.join(self.current_path, selected_item)
+                
+                    
+                
+                if os.path.isdir(selected_path):
+                    for i in range(2, self.height):
+                        self.stdscr.addch(i, self.width // 2, '|')
+                    self.active_pane_index = 0
+                    self.rightSide_files = self.get_files(selected_path)
+                    trimmed_rightFiles_list = [i[:fileName_size-5] + "..." if len(i) > fileName_size else i for i in self.rightSide_files]
+                    self.pane_display(False, False, selected_path, trimmed_rightFiles_list, iSplit_size, 1)
+                    
+            
+        except curses.error():
+            pass 
+            
+    def both_pane_draw(self):
+        try:
+            self.set_display_path(self.width)
             
             self.stdscr.clear()
+            iSplit_size = (self.width // 2) - 4
             
-            if (len(self.display_path) < max_x):
-                self.stdscr.addstr(0, 0, "CURRENT PATH: ", curses.color_pair(2) | curses.A_BOLD)
-                self.stdscr.addstr(0, 15, f"{self.display_path}", curses.A_BOLD)
-                self.stdscr.addstr(0, 15 + len(self.display_path) + 2, f"[{self.files_count}]", curses.color_pair(2) | curses.A_BOLD)
-            else:
-                self.stdscr.addstr(0, 0, "./  " + f"[{self.files_count}]", curses.color_pair(2) | curses.A_BOLD)
+        except curses.error():
+            pass
             
-            if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                logging.debug(f"\n\n------------ Max Limit : {self.MAX_FILE_DISPLAY_LIMIT}, Dir Len : {len(self.files)}, Files Count : {self.files_count}, Current Path : {self.current_path} ------------\n")
-                logging.debug(f"### TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}")
+    def pane_display(self, showCurrentPathFlag, clearScreenFlag, current_path, files, pos_y, rs=0):
+        try: 
+            if (clearScreenFlag):
+                self.stdscr.clear()
+                
+            if (showCurrentPathFlag):
+                self.set_display_path(self.width)
+                if (len(self.display_path) < self.width):
+                    self.stdscr.addstr(0, 0, "CURRENT PATH: ", curses.color_pair(2) | curses.A_BOLD)
+                    self.stdscr.addstr(0, 15, f"{self.display_path}", curses.A_BOLD)
+                    self.stdscr.addstr(0, 15 + len(self.display_path) + 2, f"[{self.files_count}]", curses.color_pair(2) | curses.A_BOLD)
+                else:
+                    self.stdscr.addstr(0, 0, "./  " + f"[{self.files_count}]", curses.color_pair(2) | curses.A_BOLD)
+            
+            
+            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+            #     logging.debug(f"\n\n------------ Max Limit : {self.MAX_FILE_DISPLAY_LIMIT}, Dir Len : {len(self.files)}, Files Count : {self.files_count}, Current Path : {self.current_path} ------------\n")
+            #     logging.debug(f"### TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}")
 
-            if self.files == []:
-                self.stdscr.addstr(2, 2 , "CURRENT DIRECTORY IS EMPTY!", curses.color_pair(3))
+            if files == []:
+                self.stdscr.addstr(2, pos_y , "CURRENT DIRECTORY IS EMPTY!", curses.color_pair(3))
             else:
-                for i, file in enumerate(self.files):
-                        if (i <= self.MAX_FILE_DISPLAY_LIMIT):
-                            if ((self.selected_index >= len(self.files) - 1) and (i == self.MAX_FILE_DISPLAY_LIMIT)):
-                                if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                                    logging.debug(f">>> TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} <<<")
-                                self.highlight_current_position(i, file)
-                            
-                            elif ((self.selected_index > self.MAX_FILE_DISPLAY_LIMIT) and (i == self.MAX_FILE_DISPLAY_LIMIT) 
-                                    and self.selected_index < len(self.files) - 1):
-                                if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                                    logging.debug(f"??? TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} ???")
-                                self.highlight_current_position(i, file)
+                if (self.dir_mode_flag):
+                    n = os.path.abspath(current_path).strip().rfind("\\") 
+                    fs =  "..." + current_path[n:] if len("..." + current_path[n:]) < self.width//2 - 5 else current_path[self.width//2 - 5]
+                    self.stdscr.addstr(1, pos_y + 2, "..." + current_path[n:])
 
-                            elif i == self.selected_index and self.selected_index <= self.MAX_FILE_DISPLAY_LIMIT:
-                                if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                                    logging.debug(f"%%% TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} %%%")
-                                self.highlight_current_position(i, file)
-
-                            elif os.path.isdir(os.path.join(self.current_path, file)):
-                                self.stdscr.addstr(i + 2, 2, file, curses.color_pair(1))
-                                if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                                    logging.debug(f"TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
-                                
+                for i, file in enumerate(files):
+                    if (i <= self.MAX_FILE_DISPLAY_LIMIT):
+                        if ((self.selected_index >= len(files) - 1) and (i == self.MAX_FILE_DISPLAY_LIMIT)):
+                            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+                            #     logging.debug(f">>> TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} <<<")
+                            if (not self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(i, file, pos_y)
+                                if (self.temp_values != []):
+                                    self.temp_values = []
+                                self.temp_values.append([i, file, pos_y])
+                            elif (self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(self.temp_values[0][0], self.temp_values[0][1], self.temp_values[0][2])
+                                if (rs and os.path.isdir(os.path.join(current_path, file))):
+                                    self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                                elif (rs):
+                                    self.stdscr.addstr(i + 2, pos_y, file)
+                                    
+                            elif os.path.isdir(os.path.join(current_path, file)):
+                                self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
                             else:
-                                self.stdscr.addstr(i + 2, 2, file) 
-                                if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                                    logging.debug(f"  TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
-                                
+                                self.stdscr.addstr(i + 2, pos_y, file) 
+                        elif ((self.selected_index > self.MAX_FILE_DISPLAY_LIMIT) and (i == self.MAX_FILE_DISPLAY_LIMIT) 
+                                and self.selected_index < len(files) - 1):
+                            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+                            #     logging.debug(f"??? TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} ???")
+                            if (not self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(i, file, pos_y)
+                                if (self.temp_values != []):
+                                    self.temp_values = []
+                                self.temp_values.append([i, file, pos_y])
+                            elif (self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(self.temp_values[0][0], self.temp_values[0][1], self.temp_values[0][2])
+                                if (rs and os.path.isdir(os.path.join(current_path, file))):
+                                    self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                                elif (rs):
+                                    self.stdscr.addstr(i + 2, pos_y, file) 
+                                    
+                            elif os.path.isdir(os.path.join(current_path, file)):
+                                self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                            else:
+                                self.stdscr.addstr(i + 2, pos_y, file) 
+
+                        elif i == self.selected_index and self.selected_index <= self.MAX_FILE_DISPLAY_LIMIT:
+                            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+                            #     logging.debug(f"%%% TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} %%%")
+                            if (not self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(i, file, pos_y)
+                                if (self.temp_values != []):
+                                    self.temp_values = []
+                                self.temp_values.append([i, file, pos_y])
+                            elif (self.dir_mode_flag and not self.active_pane_index):
+                                self.highlight_current_position(self.temp_values[0][0], self.temp_values[0][1], self.temp_values[0][2])
+                                if (rs and os.path.isdir(os.path.join(current_path, file))):
+                                    self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                                elif (rs):
+                                    self.stdscr.addstr(i + 2, pos_y, file) 
+                                    
+                            elif os.path.isdir(os.path.join(current_path, file)):
+                                self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                            else:
+                                self.stdscr.addstr(i + 2, pos_y, file) 
+                        elif os.path.isdir(os.path.join(current_path, file)):
+                            self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
+                            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+                            #     logging.debug(f"TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
+                        else:
+                            self.stdscr.addstr(i + 2, pos_y, file) 
+                            # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
+                            #     logging.debug(f"  TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
+                            
             self.stdscr.refresh()
         except curses.error:
             pass 
@@ -201,12 +303,12 @@ class FileExplorer:
             files = os.listdir(path)
 
             if (self.hidden_folder):
-                dirs = [f for f in files if os.path.isdir(os.path.join(self.current_path, f)) if not f.startswith('.') or (f.startswith('.') and f[1] == '_')]  # Exclude hidden folders
+                dirs = [f for f in files if os.path.isdir(os.path.join(path, f)) if not f.startswith('.') or (f.startswith('.') and f[1] == '_')]  # Exclude hidden folders
                 files = [f for f in files if not f.startswith('.') and f not in dirs]
             else:
-                dirs = [f for f in files if os.path.isdir(os.path.join(self.current_path, f))]
+                dirs = [f for f in files if os.path.isdir(os.path.join(path, f))]
                 files = [f for f in files if f not in dirs]        
-            return self.list_and_sort_folders(self.current_path, dirs + files, self.descendingSort_Flag)
+            return self.list_and_sort_folders(path, dirs + files, self.descendingSort_Flag)
         except Exception as e:
             self.exception_string = e
             self.exception_check = 1
@@ -233,11 +335,12 @@ class FileExplorer:
             with open("files_history.json", "r") as r:
                 self.json_dict = json.load(r)
             
-            if (len(self.json_dict["Recent_Folders"]) >= 15):
+            if (len(self.json_dict["Recent_Folders"]) >= 10):
                 self.json_dict["Recent_Folders"].pop()
             
-            if (len(self.json_dict["Recent_Folders"]) < 15 and self.current_path not in self.json_dict["Recent_Folders"]):
-                self.json_dict["Recent_Folders"].append(self.current_path)
+            if (len(self.json_dict["Recent_Folders"]) < 10 and 
+            os.path.abspath(self.current_path.strip()) not in self.json_dict["Recent_Folders"]):
+                self.json_dict["Recent_Folders"].append(os.path.abspath(self.current_path.strip()))
             
             if (self.current_path != self.root_path):
                 self.json_dict["Restore_Folder"] = self.current_path
@@ -297,7 +400,6 @@ class FileExplorer:
                     temp_files = self.get_files(self.current_path)
                     self.files_count = len(temp_files)
                     self.files = temp_files[self.top_position:]
-                    # print("\n", self.files, self.selected_index)
                 
                 logging.debug(f"!!!TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}")
             
@@ -457,7 +559,14 @@ class FileExplorer:
                     except FileNotFoundError:
                         pass
                     exit()
-        
+                    
+        elif key == ord('D'):
+            selected_item = self.files[self.selected_index]
+            selected_path = os.path.join(self.current_path, selected_item)
+            if os.path.isdir(selected_path):
+                self.dir_mode_flag = not self.dir_mode_flag
+                self.enter_once = True
+                    
         elif key in [ord('`'), ord('~'), ord('.'), ord('>')]:  # Go back to Root Path
             self.current_path = self.root_path
             self.files = self.get_files(self.current_path)
@@ -471,7 +580,12 @@ class FileExplorer:
         elif key == ord('C'):  # Copy selected folder path to clipboard
             pyperclip.copy(self.current_path)
         
-        elif key in [ord('h'), ord('H')]:   # So hidden or unhidden folders
+        elif key in [ord('h')]:
+            self.current_path = os.path.expanduser('~')
+            self.files = self.get_files(self.current_path)
+            self.selected_index = 0
+        
+        elif key in [ord('H')]:   # So hidden or unhidden folders
             if (self.hidden_folder):
                 self.hidden_folder = 0
             else:
@@ -479,6 +593,9 @@ class FileExplorer:
             
             self.files = self.get_files(self.current_path)
             self.selected_index = 0
+            
+        elif key == ord('\t'):
+            self.active_pane_index = not self.active_pane_index
 
     def run(self):
         try:
@@ -489,23 +606,33 @@ class FileExplorer:
         try:
             os.remove("explorer_dir.txt")
         except FileNotFoundError:
-            pass
-        
-        
-        while True:            
-            self.draw()
-            key = self.stdscr.getch()
+            pass        
 
+        navigation_list = [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8, curses.KEY_RIGHT, curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
+        up_down_keys = [curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
+        
+        key = None
+        self.draw()
+        while True:
+            key = self.stdscr.getch()
+            # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
+                
+                
             if key in [27, ord('q'), ord('Q')]:  
                 self.files = self.get_files(self.current_path)
                 logging.debug(f"\n\n{self.files}")
                 exit()
             else:
-                if key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8, curses.KEY_RIGHT, curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]:
+                if key in navigation_list:
+                    if (not self.enter_once):
+                        self.dir_mode_flag = not self.dir_mode_flag
+                        self.enter_once = True
+                    # else:
                     self.navigate(key)
                 else:
                     self.function_keys(key)
-
+                self.draw()  
+                
 def main(stdscr):
     explorer = FileExplorer(stdscr)
     explorer.run()
