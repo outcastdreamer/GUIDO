@@ -33,6 +33,11 @@ from sys import exit
 import pyperclip
 import curses
 
+try:
+    import ollama
+except ModuleNotFoundError:
+    pass
+
 logging.basicConfig(filename='app.log', filemode='w', 
                     format='%(lineno)d, %(funcName)s=> %(message)s', datefmt='%H:%M:%S',
                     level=logging.CRITICAL)
@@ -62,6 +67,7 @@ class FileExplorer:
         self.dir_mode_flag = False
         self.rightSide_files = []
         self.enter_once = True
+        self.drive_mode = False
         self.temp_values = []
         self.MAX_FILE_DISPLAY_LIMIT = curses.LINES - 3
         logging.debug(" NEW SESSION BEGINS ".center(75, "+"))
@@ -85,7 +91,7 @@ class FileExplorer:
         
         curses.curs_set(0)
         self.stdscr.keypad(True)
-        self.stdscr.nodelay(True)
+        self.stdscr.nodelay(False)
         self.stdscr.refresh()
     
     def set_display_path(self, width):
@@ -115,7 +121,7 @@ class FileExplorer:
         except curses.error:
             pass 
 
-    def draw(self):
+    def draw(self, path = ""):
         self.height, self.width = self.stdscr.getmaxyx()
         self.MAX_FILE_DISPLAY_LIMIT = self.height - 3
         if (self.active_pane_index):
@@ -123,7 +129,7 @@ class FileExplorer:
         elif (self.dir_mode_flag):
             self.right_pane_view()
         else:    
-            self.pane_display(True, True, self.current_path, self.get_files(self.current_path), 2)
+            self.pane_display(True, True, self.current_path, path, 2)
             
     def right_pane_view(self):
         try:
@@ -354,6 +360,56 @@ class FileExplorer:
             with open("files_history.json", "w") as w:
                 w.write(json_obj)
                 
+    # ----------------------------------------------- OLLAMA ---------------------------------------------- #
+    
+    def summarize_file(self, file_path):
+        data = ""
+        with open(file_path, "r") as r:
+            data = r.read()
+        prompt = f"Summarize this data: \"{data}\" from the file name: \"{os.path.basename(file_path)}\""
+        response = ""
+        try:
+            stream = ollama.chat(
+                model='llama3',
+                messages=[{'role': 'user', 'content': prompt}],
+                stream=True,
+            )
+            # Collect the response from the stream
+            for chunk in stream:
+                response += chunk['message']['content']
+        except:
+            pass
+        return response.strip()
+                
+    def display_summary(self, file_path):
+        response = self.summarize_file(file_path)
+        # print("Response is: \n", response)
+        if (response == ""):
+            # print("Empty Response")
+            pass
+        else:
+            # print("\nI am here".upper())
+            self.stdscr.clear()
+            self.stdscr.clear()
+            
+            self.stdscr.addstr(1, 0, response)
+            while (True):       
+                key = self.stdscr.getch()
+                
+                # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
+                    
+                    
+                if key in [27, ord('q'), ord('Q')]:  
+                    self.files = self.get_files(self.current_path)
+                    logging.debug(f"\n\n{self.files}")
+                    exit()
+                else:
+                    if key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8]:
+                        # print("\nLEFT KEY TO BREAK")
+                        break           
+            # print("\nOUTSIDE LOOP") 
+    
+    # --------------------------------------------- NAVIGATION -------------------------------------------- #
     
     def navigate(self, key):
         logging.debug(f"BEGUN key : {str(key)}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, curses.LINES: {curses.LINES}")
@@ -559,7 +615,21 @@ class FileExplorer:
                     except FileNotFoundError:
                         pass
                     exit()
-                    
+        
+        elif key == ord('l'):
+            selected_item = self.files[self.selected_index]
+            selected_path = os.path.join(self.current_path, selected_item)
+            if not (os.path.isdir(selected_path)):
+                self.display_summary(selected_path) 
+                
+        elif key == ord('v'):
+            drives = [chr(x) + ":" for x in range(65,91) if os.path.exists(chr(x) + ":")]
+            self.drive_mode = True
+            # print("Drives: ", drives)
+            self.selected_index = 0
+            self.files = drives
+            self.files_count = len(self.files)
+        
         elif key == ord('D'):
             selected_item = self.files[self.selected_index]
             selected_path = os.path.join(self.current_path, selected_item)
@@ -580,7 +650,7 @@ class FileExplorer:
         elif key == ord('C'):  # Copy selected folder path to clipboard
             pyperclip.copy(self.current_path)
         
-        elif key in [ord('h')]:
+        elif key in [ord('h')]:  # Go to Home Directory (C:\Users\Username)
             self.current_path = os.path.expanduser('~')
             self.files = self.get_files(self.current_path)
             self.selected_index = 0
@@ -612,9 +682,10 @@ class FileExplorer:
         up_down_keys = [curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
         
         key = None
-        self.draw()
+        self.draw(self.get_files(self.current_path))
         while True:
             key = self.stdscr.getch()
+            # print(self.files)
             # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
                 
                 
@@ -622,7 +693,7 @@ class FileExplorer:
                 self.files = self.get_files(self.current_path)
                 logging.debug(f"\n\n{self.files}")
                 exit()
-            else:
+            else:                    
                 if key in navigation_list:
                     if (not self.enter_once):
                         self.dir_mode_flag = not self.dir_mode_flag
@@ -631,7 +702,11 @@ class FileExplorer:
                     self.navigate(key)
                 else:
                     self.function_keys(key)
-                self.draw()  
+                    
+                if (self.drive_mode):
+                    self.draw(self.files)
+                else:
+                    self.draw(self.get_files(self.current_path))  
                 
 def main(stdscr):
     explorer = FileExplorer(stdscr)
