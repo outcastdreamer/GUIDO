@@ -24,23 +24,23 @@
 # ----------------------------------------------------------------------------------------------------- #
 import os
 import re
+import sys
 import json
 import time
+import ctypes
+import pathlib
 import logging
-from sys import exit
-
-
-import pyperclip
-import curses
 
 try:
     import ollama
+    import curses
+    import pyperclip
 except ModuleNotFoundError:
     pass
 
-logging.basicConfig(filename='app.log', filemode='w', 
+logging.basicConfig(filename = os.path.join(pathlib.Path(rf"{__file__}").parent, 'app.log'), filemode='w', 
                     format='%(lineno)d, %(funcName)s=> %(message)s', datefmt='%H:%M:%S',
-                    level=logging.CRITICAL)
+                    level=logging.DEBUG)
 
 version = "0.0.6"
 
@@ -48,13 +48,14 @@ version = "0.0.6"
 class FileExplorer:
     def __init__(self, stdscr, path='.'):
         self.stdscr = stdscr
-        self.exe_path = os.getcwd()
+        self.exe_path = pathlib.Path(rf"{__file__}").parent
+        # print("Exe_Path: ", self.exe_path)
         self.current_path = os.path.abspath(path)
         self.root_path = self.current_path
         self.display_path = self.current_path
         self.previous_path = ""
         self.selected_index = 0
-        self.hidden_folder = 0
+        self.hidden_folder = True
         self.exception_check = 0
         self.exception_string = ""
         self.json_dict = {"Recent_Folders":[], "Restore_Folder":"", "shortcuts":{}}
@@ -69,12 +70,14 @@ class FileExplorer:
         self.enter_once = True
         self.drive_mode = False
         self.temp_values = []
+        self.reached_volumeDrives = False
         self.MAX_FILE_DISPLAY_LIMIT = curses.LINES - 3
         logging.debug(" NEW SESSION BEGINS ".center(75, "+"))
         logging.debug(f"Version: {version}")
         logging.debug(f"self.MAX_FILE_DISPLAY_LIMIT #1 : {self.MAX_FILE_DISPLAY_LIMIT}, curses.LINES : {curses.LINES}")
         logging.debug(f"self.MAX_FILE_DISPLAY_LIMIT #1 : {self.MAX_FILE_DISPLAY_LIMIT}, curses.LINES : {curses.LINES}")
         logging.debug(f"exe path: {self.exe_path}")
+        logging.debug(f"current path: {self.current_path}")
         os.system("cls")
         
         # ----------------------------------------------------------------------------------------------------- #
@@ -95,17 +98,24 @@ class FileExplorer:
         self.stdscr.refresh()
     
     def set_display_path(self, width):
-        current_len = len("CURRENT PATH: ") + len(self.current_path) + 2 + len(f"[{self.files_count}]")
-        if (current_len > width):
+        if (self.reached_volumeDrives):
+            current_len = len("CURRENT PATH: ") + len(" >>> Volume Drives <<< ") + 2 + len(f"[{self.files_count}]")
+        else:
+            current_len = len("CURRENT PATH: ") + len(self.current_path) + 2 + len(f"[{self.files_count}]")
+        if (self.reached_volumeDrives):
+            self.display_path = " >>> Volume Drives <<< "
+        elif (current_len > width):
             prev_dir = self.current_path[0:self.current_path.rfind("\\")]
             self.display_path = "...\\" + prev_dir[prev_dir.rfind("\\")+1:] + "\\" + self.current_path[self.current_path.rfind("\\")+1:]
             if (len(self.display_path) > width):
                 self.display_path = "...\\" + self.display_path[self.display_path.rfind("\\") + 1:]
         else:
             self.display_path = self.current_path
-        
+
     def highlight_current_position(self, i, file, pos_y):
         try:
+            logging.debug(f"(i.){i}, {pos_y}, {file}")
+            
             if (self.exception_check):
                 if (self.current_path != self.root_path):
                     self.previous_path = self.current_path[:self.current_path.rfind("\\")]
@@ -119,9 +129,11 @@ class FileExplorer:
             else:
                 self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1) | curses.A_REVERSE | curses.A_BOLD)
         except curses.error:
+            logging.debug(f"exception: (i.){i}, {pos_y}, {file}")
+            
             pass 
 
-    def draw(self, path = ""):
+    def draw(self, path_list = ""):
         self.height, self.width = self.stdscr.getmaxyx()
         self.MAX_FILE_DISPLAY_LIMIT = self.height - 3
         if (self.active_pane_index):
@@ -129,8 +141,8 @@ class FileExplorer:
         elif (self.dir_mode_flag):
             self.right_pane_view()
         else:    
-            self.pane_display(True, True, self.current_path, path, 2)
-            
+            self.pane_display(True, True, self.current_path, path_list, 2)
+
     def right_pane_view(self):
         try:
             if (self.enter_once):
@@ -146,9 +158,6 @@ class FileExplorer:
                 # print(selected_item)
                 
                 selected_path = os.path.join(self.current_path, selected_item)
-                
-                    
-                
                 if os.path.isdir(selected_path):
                     for i in range(2, self.height):
                         self.stdscr.addch(i, self.width // 2, '|')
@@ -160,7 +169,7 @@ class FileExplorer:
             
         except curses.error():
             pass 
-            
+
     def both_pane_draw(self):
         try:
             self.set_display_path(self.width)
@@ -170,7 +179,7 @@ class FileExplorer:
             
         except curses.error():
             pass
-            
+
     def pane_display(self, showCurrentPathFlag, clearScreenFlag, current_path, files, pos_y, rs=0):
         try: 
             if (clearScreenFlag):
@@ -191,7 +200,17 @@ class FileExplorer:
             #     logging.debug(f"### TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}")
 
             if files == []:
-                self.stdscr.addstr(2, pos_y , "CURRENT DIRECTORY IS EMPTY!", curses.color_pair(3))
+                if (self.exception_check):
+                    # if ("Permission" in  type(self.exception_string).__name__):
+                    #     self.stdscr.addstr(2, pos_y , "!!! PERMISSION DENIED !!!", curses.color_pair(3))
+                    # else:
+                    self.stdscr.addstr(2, 0, f"An exception occurred: '{type(self.exception_string).__name__}': {self.exception_string}", curses.color_pair(3))
+                    self.stdscr.addstr(5, pos_y + 7, "Press BACK/LEFT Key to go back to previous directory")
+                    self.current_path = self.previous_path
+                    self.exception_check = False
+                    self.exception_string = ""
+                else:
+                    self.stdscr.addstr(2, pos_y , "CURRENT DIRECTORY IS EMPTY!", curses.color_pair(3))
             else:
                 if (self.dir_mode_flag):
                     n = os.path.abspath(current_path).strip().rfind("\\") 
@@ -199,10 +218,12 @@ class FileExplorer:
                     self.stdscr.addstr(1, pos_y + 2, "..." + current_path[n:])
 
                 for i, file in enumerate(files):
+                    if (len(file) >= self.width):
+                        file = file[:self.width - 10] + "..." + file[file.rfind("."):]
                     if (i <= self.MAX_FILE_DISPLAY_LIMIT):
                         if ((self.selected_index >= len(files) - 1) and (i == self.MAX_FILE_DISPLAY_LIMIT)):
                             # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                            #     logging.debug(f">>> TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} <<<")
+                            # logging.debug(f">>> TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} <<<")
                             if (not self.dir_mode_flag and not self.active_pane_index):
                                 self.highlight_current_position(i, file, pos_y)
                                 if (self.temp_values != []):
@@ -222,7 +243,7 @@ class FileExplorer:
                         elif ((self.selected_index > self.MAX_FILE_DISPLAY_LIMIT) and (i == self.MAX_FILE_DISPLAY_LIMIT) 
                                 and self.selected_index < len(files) - 1):
                             # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                            #     logging.debug(f"??? TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} ???")
+                            # logging.debug(f"??? TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} ???")
                             if (not self.dir_mode_flag and not self.active_pane_index):
                                 self.highlight_current_position(i, file, pos_y)
                                 if (self.temp_values != []):
@@ -242,7 +263,7 @@ class FileExplorer:
 
                         elif i == self.selected_index and self.selected_index <= self.MAX_FILE_DISPLAY_LIMIT:
                             # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                            #     logging.debug(f"%%% TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} %%%")
+                            # logging.debug(f"%%% TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position} %%%")
                             if (not self.dir_mode_flag and not self.active_pane_index):
                                 self.highlight_current_position(i, file, pos_y)
                                 if (self.temp_values != []):
@@ -262,22 +283,21 @@ class FileExplorer:
                         elif os.path.isdir(os.path.join(current_path, file)):
                             self.stdscr.addstr(i + 2, pos_y, file, curses.color_pair(1))
                             # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                            #     logging.debug(f"TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
+                            # logging.debug(f"TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
                         else:
                             self.stdscr.addstr(i + 2, pos_y, file) 
                             # if (self.selected_index >= self.MAX_FILE_DISPLAY_LIMIT - 3):
-                            #     logging.debug(f"  TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
+                            # logging.debug(f"  TopPos: {self.top_position}, SI: {self.selected_index}, CI: {i}, FN: {file}, Pos: {self.selected_index - self.top_position}")
                             
             self.stdscr.refresh()
         except curses.error:
             pass 
 
-        
     def sort_num_directory(self, files, descending=False):
         match = re.search(r'\d+', files)
         numeric_part = int(match.group()) if match else float('inf')
-        return -numeric_part if descending else numeric_part
-    
+        return -numeric_part if descending else numeric_part    
+
     def list_and_sort_folders(self, path, items=[], descending=False):
         folders = [item for item in items if os.path.isdir(os.path.join(path, item))]
         files = [item for item in items if os.path.isfile(os.path.join(path, item))]
@@ -304,21 +324,51 @@ class FileExplorer:
 
         return sorted_items
 
-    def get_files(self, path):
-        try:
-            files = os.listdir(path)
+    def is_hidden_or_system_filesFolders(self, filepath):
+        if (os.path.exists(filepath)):
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(filepath)
+            if attrs == -1:
+                logging.debug(f"The file {filepath} does not exist")
+                # raise FileNotFoundError(f"The file {filepath} does not exist.")
+                return True
+            # Check if the file has the hidden or system attribute
+            return bool(attrs & (0x02 | 0x04))
+        else:
+            return True
 
-            if (self.hidden_folder):
-                dirs = [f for f in files if os.path.isdir(os.path.join(path, f)) if not f.startswith('.') or (f.startswith('.') and f[1] == '_')]  # Exclude hidden folders
-                files = [f for f in files if not f.startswith('.') and f not in dirs]
-            else:
-                dirs = [f for f in files if os.path.isdir(os.path.join(path, f))]
-                files = [f for f in files if f not in dirs]        
-            return self.list_and_sort_folders(path, dirs + files, self.descendingSort_Flag)
+    def listdir_no_hidden_or_system_filesFolders(self, directory):
+        try:
+            all_files = os.listdir(directory)
+            visible_files = [f for f in all_files if not self.is_hidden_or_system_filesFolders(os.path.join(directory, f))]
+            return visible_files
         except Exception as e:
+            logging.debug(f"Exception is : {e}")
             self.exception_string = e
             self.exception_check = 1
             self.previous_path = self.current_path
+            return []
+
+    def get_files(self, path):
+        # logging.debug(f"original listdir: {os.listdir(path)}")
+        
+        try:
+            files = self.listdir_no_hidden_or_system_filesFolders(path)
+            # logging.debug(f"Actual files: {files}")
+
+            if (self.hidden_folder):
+                dirs = [f for f in files if os.path.isdir(os.path.join(path, f)) if not (f.startswith('.') or (f.startswith('.') and f[1] == '_') or (f.startswith('$')))]  # Exclude hidden folders
+                files = [f for f in files if not f.startswith('.') and f not in dirs]
+            else:
+                dirs = [f for f in files if os.path.isdir(os.path.join(path, f))]
+                files = [f for f in files if f not in dirs]   
+            # logging.debug(self.list_and_sort_folders(path, dirs + files, self.descendingSort_Flag))     
+            return self.list_and_sort_folders(path, dirs + files, self.descendingSort_Flag)
+        except Exception as e:
+            logging.debug(f"Exception is : {e}")
+            self.exception_string = e
+            self.exception_check = 1
+            self.previous_path = self.current_path
+            return []
 
     def get_recent_files(self):
         self.previous_path = self.current_path
@@ -326,7 +376,7 @@ class FileExplorer:
         dirs = [f for f in files if os.path.isdir(os.path.join(self.current_path, f))]
         files = [f for f in files if f not in dirs]
         return dirs + files
-    
+
     def find_exact_match_index(self, folders, target_folder):
         pattern = re.compile(fr'^{re.escape(target_folder)}$')
         
@@ -335,10 +385,53 @@ class FileExplorer:
                 return index
         
         return -1
-    
+
+    def get_user_input(self, base_file_name):
+        # print("\nReached Here")
+        self.stdscr.clear()
+        # self.stdscr.nodelay(True)
+        self.stdscr.refresh()
+        curses.echo()
+        
+        self.stdscr.addstr(1, 0, f"Given this 'data' from '{os.path.basename(base_file_name)}'. (Enter your prompt below now: )")
+        # user_input = self.stdscr.getstr(3, 0, 1000)
+        user_input = ""
+        y_pos = 3
+        x_pos = 0
+        # print("BEFORE LOOP")
+        
+        
+        while True:
+            try:
+                key = self.stdscr.getch()
+                    
+                if key in [27, ord('q'), ord('Q')]:  
+                    break
+                elif key in [curses.KEY_RIGHT, ord('d'), curses.KEY_ENTER, 10, 13]:
+                    break
+                else:
+                    if (str(chr(key)).isprintable()):
+                        user_input += str(chr(key))
+                        self.stdscr.refresh()
+                        self.stdscr.addstr(y_pos, x_pos, user_input)
+                        x_pos += 1
+                        
+                        if (x_pos > self.width):
+                            y_pos += 1
+                            x_pos = 0
+                self.stdscr.refresh()
+            except:
+                pass
+        curses.noecho()
+        # print("OUTSIDE LOOP")
+        # self.stdscr.nodelay(False)
+        
+        return user_input
+
     def json_updater(self):
-        if (os.path.exists("files_history.json")):
-            with open("files_history.json", "r") as r:
+        json_path = os.path.join(self.exe_path, "files_history.json")
+        if (os.path.exists(self.exe_path)):
+            with open(json_path, "r") as r:
                 self.json_dict = json.load(r)
             
             if (len(self.json_dict["Recent_Folders"]) >= 10):
@@ -352,25 +445,26 @@ class FileExplorer:
                 self.json_dict["Restore_Folder"] = self.current_path
             
             json_obj = json.dumps(self.json_dict, indent=4)
-            with open("files_history.json", "w") as w:
+            with open(json_path, "w") as w:
                 w.write(json_obj)
             
         else:
             json_obj = json.dumps(self.json_dict, indent=4)
-            with open("files_history.json", "w") as w:
+            with open(json_path, "w") as w:
                 w.write(json_obj)
-                
-    # ----------------------------------------------- OLLAMA ---------------------------------------------- #
-    
-    def summarize_file(self, file_path):
+
+# ----------------------------------------------- OLLAMA ---------------------------------------------- #
+
+    def Llama3_prompt(self, prompt_msg, file_path):
         data = ""
         with open(file_path, "r") as r:
             data = r.read()
-        prompt = f"Summarize this data: \"{data}\" from the file name: \"{os.path.basename(file_path)}\""
+        prompt = f"Given the data: \"{data}\" from the file name: \"{os.path.basename(file_path)}\". " + prompt_msg
         response = ""
         try:
             stream = ollama.chat(
-                model='llama3',
+                model='llama3.1:8b',
+                # model='tinyllama:latest',
                 messages=[{'role': 'user', 'content': prompt}],
                 stream=True,
             )
@@ -381,8 +475,15 @@ class FileExplorer:
             pass
         return response.strip()
                 
-    def display_summary(self, file_path):
-        response = self.summarize_file(file_path)
+    def display_llama3_prompt(self, key, file_path):
+        response = ""
+        
+        if (key == ord('l')):
+            response = self.Llama3_prompt("Summarize this file data. At the end use bulletin points for keywords from the data, if possible.", file_path)
+        elif (key == ord('i')):
+            user_prompt = self.get_user_input(file_path)
+            response = self.Llama3_prompt(user_prompt, file_path)
+        
         # print("Response is: \n", response)
         if (response == ""):
             # print("Empty Response")
@@ -391,28 +492,39 @@ class FileExplorer:
             # print("\nI am here".upper())
             self.stdscr.clear()
             self.stdscr.clear()
-            
             self.stdscr.addstr(1, 0, response)
-            while (True):       
-                key = self.stdscr.getch()
-                
-                # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
+            
+            if (key == ord('l')):
+                while (True):       
+                    key = self.stdscr.getch()
                     
-                    
-                if key in [27, ord('q'), ord('Q')]:  
-                    self.files = self.get_files(self.current_path)
-                    logging.debug(f"\n\n{self.files}")
-                    exit()
-                else:
-                    if key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8]:
-                        # print("\nLEFT KEY TO BREAK")
-                        break           
+                    # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
+                        
+                        
+                    if key in [27, ord('q'), ord('Q')]:  
+                        self.files = self.get_files(self.current_path)
+                        logging.debug(f"\n\n{self.files}")
+                        sys.exit()
+                    else:
+                        if key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8]:
+                            # print("\nLEFT KEY TO BREAK")
+                            break           
             # print("\nOUTSIDE LOOP") 
     
-    # --------------------------------------------- NAVIGATION -------------------------------------------- #
+# --------------------------------------------- NAVIGATION -------------------------------------------- #
+    def file_array_func(self):
+        if self.drive_mode:
+            logging.debug(f"Drive mode is ON: {self.files}")
+        else:
+            logging.debug(f"Drive mode is OFF: , {self.current_path}, {self.get_files(self.current_path)}")
+        
+        l = lambda : self.files if self.drive_mode else self.get_files(self.current_path)
+        logging.debug(f"file_array_func: {l()}")
+        return l()
     
     def navigate(self, key):
-        logging.debug(f"BEGUN key : {str(key)}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, curses.LINES: {curses.LINES}")
+        key_dict = {258:"DOWN", 259:"UP", 260:"LEFT", 261:"RIGHT"}
+        logging.debug(f"BEGUN key => {str(key)} : {key_dict[key]}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, curses.LINES: {curses.LINES}")
         
         # ------------------------------------------ ARROW KEYS START ----------------------------------------- #
         
@@ -423,7 +535,7 @@ class FileExplorer:
                 
                 if (self.top_position > 0 and self.top_position < self.selected_index):
                     self.top_position -= 1
-                    temp_files = self.get_files(self.current_path)
+                    temp_files = self.file_array_func()
                     self.files_count = len(temp_files)
                     self.files = temp_files[self.top_position:]
             elif self.selected_index == 0:
@@ -432,13 +544,13 @@ class FileExplorer:
                     self.top_position = self.files_count - 1 - self.MAX_FILE_DISPLAY_LIMIT
                 else:
                     self.top_position = 0  
-                temp_files = self.get_files(self.current_path)
+                temp_files = self.file_array_func()
                 self.files_count = len(temp_files)
                 self.files = temp_files[self.top_position:]
             
             if (self.exception_check):
                 self.current_path = self.previous_path
-                self.files = self.get_files(self.current_path)
+                self.files = self.file_array_func()
                 self.files_count = len(self.files)
                 self.exception_check = 0
                 self.exception_string = ""
@@ -448,37 +560,42 @@ class FileExplorer:
                 
                 self.selected_index += 1
                 self.json_updater()
-                logging.debug(f"***  ENTER HERE : {self.top_position}, SI : {self.selected_index}, FC : {self.files_count}, CP: {self.current_path}")
+                logging.debug(f"***  ENTER DOWN #1 : {self.top_position}, SI : {self.selected_index}, FC : {self.files_count}, CP: {self.current_path}")
                 
                 if (self.selected_index > self.MAX_FILE_DISPLAY_LIMIT):
                     self.top_position += 1
-                    logging.debug(f"???  ENTER HERE : {self.top_position}, SI : {self.selected_index}")
-                    temp_files = self.get_files(self.current_path)
+                    logging.debug(f"***  ENTER DOWN #1.1 : TP : {self.top_position}, SI : {self.selected_index}")
+                    temp_files = self.file_array_func()
                     self.files_count = len(temp_files)
                     self.files = temp_files[self.top_position:]
                 
-                logging.debug(f"!!!TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}")
+                    logging.debug(f"!!!TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, files: {self.files}, temp: {temp_files}")
             
             
             elif self.selected_index >= self.files_count - 1:
+                logging.debug(f"???  ENTER DOWN #2 : TP : {self.top_position}, SI : {self.selected_index}")
+                
                 self.json_updater()
                 self.top_position = 0
                 self.selected_index = 0
-                self.files = self.get_files(self.current_path)
+                self.files = self.file_array_func()
                 self.files_count = len(self.files)
                 
             if (self.exception_check):
                 self.current_path = self.previous_path
                 logging.debug(f"DOWN Exception : PrevPath : {self.previous_path}, CP: {self.current_path}")
-                self.files = self.get_files(self.current_path)
+                self.files = self.file_array_func()
                 self.files_count = len(self.files)
                 self.exception_check = 0
                 self.exception_string = ""
             
         
-        elif key in [curses.KEY_RIGHT, ord('d'), curses.KEY_ENTER, 10, 13]:
+        elif key in [curses.KEY_RIGHT, ord('d'), curses.KEY_ENTER, 10, 13]:     
             if (self.files == []):
                 return
+            
+            if (self.reached_volumeDrives):
+                self.reached_volumeDrives = False
             
             self.json_updater()
             
@@ -486,16 +603,25 @@ class FileExplorer:
                 selected_item = self.files[self.selected_index]  
             else:
                 selected_item = self.files[self.selected_index - self.top_position]
+                
+            # print(selected_item)
             
-            selected_path = os.path.join(self.current_path, selected_item)
-            previous_index = self.selected_index
+            if (self.drive_mode):
+                self.drive_mode = False
+                self.current_path = self.files[self.selected_index] + "\\"
+                os.chdir(self.current_path[0] + ":\\")
+            else:
+                self.previous_index = self.selected_index
+
+            selected_path = os.path.join(self.current_path, selected_item)        
             
-            logging.debug(f"Files : {self.files}")
-            logging.debug(f"SelInd: {self.selected_index}, SelectedItem: {selected_item}, SelectedPath: {selected_path}, CurrentPath: {self.current_path}")
+            # logging.debug(f"Files : {self.files}")
+            # logging.debug(f"SelInd: {self.selected_index}, SelectedItem: {selected_item}, SelectedPath: {selected_path}, CurrentPath: {self.current_path}")
             
             if (self.exception_check):
+                logging.debug("HERE #1")
                 self.current_path = self.previous_path
-                self.files = self.get_files(self.current_path)
+                self.files = self.file_array_func()
                 self.files_count = len(self.files)
 
                 self.exception_check = 0
@@ -503,62 +629,100 @@ class FileExplorer:
             else:
                 try:
                     if os.path.isdir(selected_path):
+                        # logging.debug("HERE #2")
                         self.current_path = selected_path
-                        self.files = self.get_files(self.current_path)
+                        # logging.debug(f"\t2. Files : {self.files}")
+                        # logging.debug(f"\t2. SelInd: {self.selected_index}, SelectedItem: {selected_item}, SelectedPath: {selected_path}, CurrentPath: {self.current_path}")
+                        self.files = self.file_array_func()
+                        # logging.debug(f"\t3. Files : {self.files}")
+                        # logging.debug(f"\t3. SelInd: {self.selected_index}, SelectedItem: {selected_item}, SelectedPath: {selected_path}, CurrentPath: {self.current_path}")
                         self.files_count = len(self.files)
                         self.selected_index = 0
+
                     else:
                         try:
+                            logging.debug("HERE #3")
+                            
                             os.startfile(selected_path) 
                         except Exception as e:
+                            logging.debug("HERE #4")
+                            
                             self.exception_string = e
                             self.exception_check = 1
-                            self.selected_index = previous_index
+                            self.selected_index = self.previous_index
                 except Exception as e:
                     self.exception_string = e
+                    logging.debug("HERE #5: ", self.exception_string)
                     self.exception_check = 1          
-                    self.selected_index = previous_index
+                    self.selected_index = self.previous_index
             self.json_updater()
+            # logging.debug("HERE #6")
+            
         
         elif key in [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8]: 
+            if (self.reached_volumeDrives):
+                return
+            
             self.json_updater()
             
             if (self.recent_check):
                 self.current_path = self.previous_path
                 self.recent_check = 0
-                self.files = self.get_files(self.current_path)
+                self.files = self.file_array_func()
                 self.files_count = len(self.files)
                 self.selected_index = 0
             else:
                 if (self.exception_check):
                     self.current_path = self.previous_path
-                    self.files = self.get_files(self.current_path)
+                    self.files = self.file_array_func()
                     self.files_count = len(self.files)
 
                     self.exception_check = 0
                     self.exception_string = ""
                 else:                
-                    previous_folder_name = self.current_path[self.current_path.rfind("\\")+1:]
+                    if (self.drive_mode):
+                        self.drive_mode = False
+                        previous_folder_name = self.current_path = self.previous_path
+                        self.selected_index = self.previous_index
+                        # print("prev path: ", self.previous_path)
+                    else:
+                        previous_folder_name = self.current_path[self.current_path.rfind("\\")+1:]
+                        if self.current_path != os.path.abspath(os.sep): 
+                            self.current_path = os.path.dirname(self.current_path)
+                        
+                        self.previous_index = self.find_exact_match_index(self.get_files(self.current_path), previous_folder_name)
+                        # print(f"PI: {self.previous_index}, PrevFold: {previous_folder_name}, LEFT HERE: {self.current_path}")
+                        logging.debug(f"PI: {self.previous_index}, PrevFold: {previous_folder_name}, LEFT HERE: {self.current_path}")
+                        
+                        if (self.previous_index == -1 and not self.reached_volumeDrives):
+                            logging.debug(f"Previous_folder_name: " + previous_folder_name)
+                            self.reached_volumeDrives = True
+                            drives = [chr(x) + ":" for x in range(65,91) if os.path.exists(chr(x) + ":")]
+                            self.previous_path = self.current_path
+                            self.previous_index = self.selected_index
+                            # print("the first prev path: ", self.previous_path)
+                            self.drive_mode = True
+                            # print("Drives: ", drives)
+                            self.selected_index = 0
+                            self.top_position = 0
+                            self.files = drives
+                            self.files_count = len(self.files)
+                            return
                     
-                    if self.current_path != os.path.abspath(os.sep): 
-                        self.current_path = os.path.dirname(self.current_path)
-                    
-                    self.previous_index = self.find_exact_match_index(self.get_files(self.current_path), previous_folder_name)
-                    if (self.previous_index == -1):
-                        return
-                    
-                    logging.debug(f"PI: {self.previous_index}, PrevFold: {previous_folder_name}, LEFT HERE: {self.current_path}")
-                    temp_files = self.get_files(self.current_path)
+                    temp_files = self.file_array_func()
                     self.files_count = len(temp_files)
                     if (self.previous_index < self.MAX_FILE_DISPLAY_LIMIT):
                         self.top_position = 0
                     self.files = temp_files[self.top_position:]
                     self.selected_index = self.previous_index
             self.json_updater()  
-        logging.debug(f"END key : {str(key)}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, CP: {self.current_path}")
-        
+        logging.debug(f"END key => {str(key)} : {key_dict[key]}, TP : {self.top_position}, SI : {self.selected_index}, len : {len(self.files)}, FC : {self.files_count}, Files: {self.files}")
+        logging.debug("------------------------------------------")
 
-    def function_keys(self, key):        
+    def function_keys(self, key):
+        selected_dir_path = os.path.join(self.exe_path, "selected_dir.txt")
+        explorer_dir_path = os.path.join(self.exe_path, "explorer_dir.txt")        
+                
         if key in [ord('o'), ord('O')]:  # Sort Order Shortcut
             if (self.descendingSort_Flag):
                 self.descendingSort_Flag = 0
@@ -586,47 +750,52 @@ class FileExplorer:
         
         elif key == ord('e'):  # Exit to Parent shell and change directory to active folder
             if os.path.isdir(self.current_path):
-                with open("selected_dir.txt", "w") as f:
+                with open(selected_dir_path, "w") as f:
                     f.write(self.current_path)
                     try:
-                        os.remove("explorer_dir.txt")
+                        os.remove(explorer_dir_path)
                     except FileNotFoundError:
                         pass
-                    exit()
+                    sys.exit()
         
-        elif key == ord('E'):  # Exit to Parent shell and change directory to selected folder
+        elif key == ord('E'):  # Exit to Parent shell and change directory to selected folder (where cursor is at)
             selected_item = self.files[self.selected_index]
             selected_path = os.path.join(self.current_path, selected_item)
             if os.path.isdir(selected_path):
-                with open("selected_dir.txt", "w") as f:
+                with open(selected_dir_path, "w") as f:
                     f.write(selected_path)
                     try:
-                        os.remove("explorer_dir.txt")
+                        os.remove(explorer_dir_path)
                     except FileNotFoundError:
                         pass
-                    exit()
+                    sys.exit()
                     
         elif key == curses.ALT_E:  # Open current folder in explorer
             if os.path.isdir(self.current_path):
-                with open("explorer_dir.txt", "w") as f:
+                with open(explorer_dir_path, "w") as f:
                     f.write(self.current_path)
                     try:
-                        os.remove("selected_dir.txt")
+                        os.remove(selected_dir_path)
                     except FileNotFoundError:
                         pass
-                    exit()
+                    sys.exit()
         
-        elif key == ord('l'):
+        elif key in [ord('l'), ord('i')]:
+            # print("\tHere Here")
             selected_item = self.files[self.selected_index]
             selected_path = os.path.join(self.current_path, selected_item)
             if not (os.path.isdir(selected_path)):
-                self.display_summary(selected_path) 
+                self.display_llama3_prompt(key, selected_path)             
                 
         elif key == ord('v'):
             drives = [chr(x) + ":" for x in range(65,91) if os.path.exists(chr(x) + ":")]
+            self.previous_path = self.current_path
+            self.previous_index = self.selected_index
+            # print("the first prev path: ", self.previous_path)
             self.drive_mode = True
             # print("Drives: ", drives)
             self.selected_index = 0
+            self.top_position = 0
             self.files = drives
             self.files_count = len(self.files)
         
@@ -668,31 +837,30 @@ class FileExplorer:
             self.active_pane_index = not self.active_pane_index
 
     def run(self):
+        selected_dir_path = os.path.join(self.exe_path, "selected_dir.txt")
+        explorer_dir_path = os.path.join(self.exe_path, "explorer_dir.txt")   
         try:
-            os.remove("selected_dir.txt")
+            os.remove(selected_dir_path)
         except FileNotFoundError:
             pass
         
         try:
-            os.remove("explorer_dir.txt")
+            os.remove(explorer_dir_path)
         except FileNotFoundError:
             pass        
 
-        navigation_list = [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8, curses.KEY_RIGHT, curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
+        navigation_list = [curses.KEY_LEFT, ord('a'), curses.KEY_BACKSPACE, 8, curses.KEY_RIGHT, ord('d'), curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
         up_down_keys = [curses.KEY_DOWN, ord('s'), curses.KEY_UP, ord('w')]
         
         key = None
-        self.draw(self.get_files(self.current_path))
+        self.draw(self.files)
         while True:
-            key = self.stdscr.getch()
-            # print(self.files)
-            # if (key not in [ord('D')] and key not in navigation_list and not self.enter_once):
-                
+            key = self.stdscr.getch()                
                 
             if key in [27, ord('q'), ord('Q')]:  
                 self.files = self.get_files(self.current_path)
                 logging.debug(f"\n\n{self.files}")
-                exit()
+                sys.exit()
             else:                    
                 if key in navigation_list:
                     if (not self.enter_once):
@@ -703,10 +871,7 @@ class FileExplorer:
                 else:
                     self.function_keys(key)
                     
-                if (self.drive_mode):
-                    self.draw(self.files)
-                else:
-                    self.draw(self.get_files(self.current_path))  
+                self.draw(self.files)
                 
 def main(stdscr):
     explorer = FileExplorer(stdscr)

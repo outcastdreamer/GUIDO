@@ -1,11 +1,23 @@
+:: v1.0.1
+
 @echo off
 
-start /b /wait python Dynamic-File-Explorer-For-CMD.py
+cd %~dp0
 
-IF EXIST selected_dir.txt (
-    for /f "tokens=* delims=" %%x in (selected_dir.txt) do cd /d %%x
+start /b /wait python "%~dp0\Dynamic-File-Explorer-For-CMD.py"
+
+IF EXIST "%~dp0\selected_dir.txt" (
+    :: echo Reading "%~dp0\selected_dir.txt"...
+    for /f "usebackq tokens=* delims=" %%x in ("%~dp0\selected_dir.txt") do (
+        echo Changing directory to "%%x"
+        cd /d "%%x"
+    )
 )
 
-IF EXIST explorer_dir.txt (
-    for /f "tokens=* delims=" %%x in (explorer_dir.txt) do explorer %%x
+IF EXIST "%~dp0\explorer_dir.txt" (
+    :: echo Reading "%~dp0\explorer_dir.txt"...
+    for /f "usebackq tokens=* delims=" %%x in ("%~dp0\explorer_dir.txt") do (
+        :: echo Changing directory to "%%x"
+        cd /d "%%x"
+    )
 )
